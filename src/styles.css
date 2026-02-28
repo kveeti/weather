@@ -1,0 +1,151 @@
+@import "tailwindcss";
+@import "./theme.css";
+
+@layer base {
+	body {
+		@apply bg-gray-1 text-gray-12 text-sm font-normal;
+	}
+
+	/* hide scrollbar */
+	html {
+		scrollbar-width: none;
+		-ms-overflow-style: none;
+		&::-webkit-scrollbar {
+			display: none;
+		}
+	}
+}
+
+:root {
+	--black-a1: rgba(0, 0, 0, 0.05);
+	--black-a2: rgba(0, 0, 0, 0.1);
+	--black-a3: rgba(0, 0, 0, 0.15);
+	--black-a4: rgba(0, 0, 0, 0.2);
+	--black-a5: rgba(0, 0, 0, 0.3);
+	--black-a6: rgba(0, 0, 0, 0.4);
+	--black-a7: rgba(0, 0, 0, 0.5);
+	--black-a8: rgba(0, 0, 0, 0.6);
+	--black-a9: rgba(0, 0, 0, 0.7);
+	--black-a10: rgba(0, 0, 0, 0.8);
+	--black-a11: rgba(0, 0, 0, 0.9);
+	--black-a12: rgba(0, 0, 0, 0.95);
+
+	--white-a1: rgba(255, 255, 255, 0.05);
+	--white-a2: rgba(255, 255, 255, 0.1);
+	--white-a3: rgba(255, 255, 255, 0.15);
+	--white-a4: rgba(255, 255, 255, 0.2);
+	--white-a5: rgba(255, 255, 255, 0.3);
+	--white-a6: rgba(255, 255, 255, 0.4);
+	--white-a7: rgba(255, 255, 255, 0.5);
+	--white-a8: rgba(255, 255, 255, 0.6);
+	--white-a9: rgba(255, 255, 255, 0.7);
+	--white-a10: rgba(255, 255, 255, 0.8);
+	--white-a11: rgba(255, 255, 255, 0.9);
+	--white-a12: rgba(255, 255, 255, 0.95);
+
+	--red-1: hsl(0, 100%, 99%);
+	--red-2: hsl(0, 100%, 98%);
+	--red-3: hsl(357, 90%, 96%);
+	--red-4: hsl(358, 100%, 93%);
+	--red-5: hsl(359, 100%, 90%);
+	--red-6: hsl(359, 94%, 87%);
+	--red-7: hsl(359, 77%, 81%);
+	--red-8: hsl(359, 70%, 74%);
+	--red-9: hsl(358, 75%, 59%);
+	--red-10: hsl(358, 69%, 55%);
+	--red-11: hsl(358, 65%, 49%);
+	--red-12: hsl(351, 63%, 24%);
+
+	--red-a1: hsla(0, 100%, 50%, 0.01);
+	--red-a2: hsla(0, 100%, 50%, 0.03);
+	--red-a3: hsla(357, 100%, 48%, 0.08);
+	--red-a4: hsla(358, 100%, 50%, 0.14);
+	--red-a5: hsla(359, 100%, 50%, 0.2);
+	--red-a6: hsla(359, 100%, 49%, 0.26);
+	--red-a7: hsla(359, 100%, 44%, 0.34);
+	--red-a8: hsla(359, 100%, 41%, 0.44);
+	--red-a9: hsla(358, 100%, 43%, 0.72);
+	--red-a10: hsla(359, 100%, 41%, 0.76);
+	--red-a11: hsla(358, 100%, 38%, 0.83);
+	--red-a12: hsla(351, 100%, 17%, 0.91);
+
+	--gray-1: #fcfcfc;
+	--gray-2: #f9f9f9;
+	--gray-3: #f0f0f0;
+	--gray-4: #e8e8e8;
+	--gray-5: #e0e0e0;
+	--gray-6: #d9d9d9;
+	--gray-7: #cecece;
+	--gray-8: #bbbbbb;
+	--gray-9: #8d8d8d;
+	--gray-10: #838383;
+	--gray-11: #646464;
+	--gray-12: #202020;
+
+	--gray-a1: #00000003;
+	--gray-a2: #00000006;
+	--gray-a3: #0000000f;
+	--gray-a4: #00000017;
+	--gray-a5: #0000001f;
+	--gray-a6: #00000026;
+	--gray-a7: #00000031;
+	--gray-a8: #00000044;
+	--gray-a9: #00000072;
+	--gray-a10: #0000007c;
+	--gray-a11: #0000009b;
+	--gray-a12: #000000df;
+
+	@media (prefers-color-scheme: dark) {
+		--red-1: oklch(0.08 0.09 29.6);
+		--red-2: oklch(0.1 0.1 29.8);
+		--red-3: oklch(0.15 0.15 26.1);
+		--red-4: oklch(0.19 0.19 27.3);
+		--red-5: oklch(0.23 0.19 28.8);
+		--red-6: oklch(0.29 0.18 30.2);
+		--red-7: oklch(0.37 0.15 33.2);
+		--red-8: oklch(0.49 0.13 37.8);
+		--red-9: oklch(0.59 0.23 37.9);
+		--red-10: oklch(0.65 0.22 43.7);
+		--red-11: oklch(0.79 0.21 49.4);
+		--red-12: oklch(0.91 0.05 25.9);
+
+		--red-a1: hsla(0, 91%, 51%, 0.04);
+		--red-a2: hsla(355, 88%, 57%, 0.07);
+		--red-a3: hsla(350, 100%, 55%, 0.18);
+		--red-a4: hsla(348, 99%, 52%, 0.27);
+		--red-a5: hsla(350, 100%, 56%, 0.34);
+		--red-a6: hsla(353, 100%, 62%, 0.41);
+		--red-a7: hsla(355, 100%, 66%, 0.52);
+		--red-a8: hsla(359, 100%, 68%, 0.69);
+		--red-a9: hsla(358, 99%, 65%, 0.89);
+		--red-a10: hsla(360, 100%, 70%, 0.92);
+		--red-a11: hsl(2, 100%, 79%);
+		--red-a12: hsl(350, 100%, 91%);
+
+		--gray-1: #111111;
+		--gray-2: #191919;
+		--gray-3: #222222;
+		--gray-4: #2a2a2a;
+		--gray-5: #313131;
+		--gray-6: #3a3a3a;
+		--gray-7: #484848;
+		--gray-8: #606060;
+		--gray-9: #6e6e6e;
+		--gray-10: #7b7b7b;
+		--gray-11: #b4b4b4;
+		--gray-12: #eeeeee;
+
+		--gray-a1: #00000000;
+		--gray-a2: #ffffff09;
+		--gray-a3: #ffffff12;
+		--gray-a4: #ffffff1b;
+		--gray-a5: #ffffff22;
+		--gray-a6: #ffffff2c;
+		--gray-a7: #ffffff3b;
+		--gray-a8: #ffffff55;
+		--gray-a9: #ffffff64;
+		--gray-a10: #ffffff72;
+		--gray-a11: #ffffffaf;
+		--gray-a12: #ffffffed;
+	}
+}

@@ -1,0 +1,82 @@
+@variant pwa (@media (display-mode: standalone));
+
+@utility focus {
+	@apply focus-visible:outline-gray-a10 outline-offset-2 outline-none focus-visible:outline-2 focus-visible:outline-solid;
+}
+
+@utility focus2 {
+	@apply focus:outline-gray-a10 outline-offset-2 outline-none focus:outline-2 focus:outline-solid;
+}
+
+@theme {
+	--color-*: initial;
+	--spacing: 0.25rem;
+	--font-*: initial;
+
+	--color-white: #fff;
+
+	--color-gray-1: var(--gray-1);
+	--color-gray-2: var(--gray-2);
+	--color-gray-3: var(--gray-3);
+	--color-gray-4: var(--gray-4);
+	--color-gray-5: var(--gray-5);
+	--color-gray-6: var(--gray-6);
+	--color-gray-7: var(--gray-7);
+	--color-gray-8: var(--gray-8);
+	--color-gray-9: var(--gray-9);
+	--color-gray-10: var(--gray-10);
+	--color-gray-11: var(--gray-11);
+	--color-gray-12: var(--gray-12);
+
+	--color-gray-a1: var(--gray-a1);
+	--color-gray-a2: var(--gray-a2);
+	--color-gray-a3: var(--gray-a3);
+	--color-gray-a4: var(--gray-a4);
+	--color-gray-a5: var(--gray-a5);
+	--color-gray-a6: var(--gray-a6);
+	--color-gray-a7: var(--gray-a7);
+	--color-gray-a8: var(--gray-a8);
+	--color-gray-a9: var(--gray-a9);
+	--color-gray-a10: var(--gray-a10);
+	--color-gray-a11: var(--gray-a11);
+	--color-gray-a12: var(--gray-a12);
+
+	--color-black-a1: var(--black-a1);
+	--color-black-a2: var(--black-a2);
+	--color-black-a3: var(--black-a3);
+	--color-black-a4: var(--black-a4);
+	--color-black-a5: var(--black-a5);
+	--color-black-a6: var(--black-a6);
+	--color-black-a7: var(--black-a7);
+	--color-black-a8: var(--black-a8);
+	--color-black-a9: var(--black-a9);
+	--color-black-a10: var(--black-a10);
+	--color-black-a11: var(--black-a11);
+	--color-black-a12: var(--black-a12);
+
+	--color-red-1: var(--red-1);
+	--color-red-2: var(--red-2);
+	--color-red-3: var(--red-3);
+	--color-red-4: var(--red-4);
+	--color-red-5: var(--red-5);
+	--color-red-6: var(--red-6);
+	--color-red-7: var(--red-7);
+	--color-red-8: var(--red-8);
+	--color-red-9: var(--red-9);
+	--color-red-10: var(--red-10);
+	--color-red-11: var(--red-11);
+	--color-red-12: var(--red-12);
+
+	--color-red-a1: var(--red-a1);
+	--color-red-a2: var(--red-a2);
+	--color-red-a3: var(--red-a3);
+	--color-red-a4: var(--red-a4);
+	--color-red-a5: var(--red-a5);
+	--color-red-a6: var(--red-a6);
+	--color-red-a7: var(--red-a7);
+	--color-red-a8: var(--red-a8);
+	--color-red-a9: var(--red-a9);
+	--color-red-a10: var(--red-a10);
+	--color-red-a11: var(--red-a11);
+	--color-red-a12: var(--red-a12);
+}

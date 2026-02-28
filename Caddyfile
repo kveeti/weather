@@ -1,0 +1,4 @@
+https://localhost:3001 {
+    tls internal
+    reverse_proxy localhost:3000
+}
