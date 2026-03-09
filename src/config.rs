@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 
 #[derive(Clone, Debug)]
 pub struct Config {
-    pub fmi_place: String,
+    pub fmi_sid: String,
+    pub fmi_sid_wind: Option<String>,
     pub port: u16,
     pub db_path: String,
     pub vapid_subject: String,
@@ -14,7 +15,8 @@ pub struct Config {
 impl Config {
     pub fn from_env() -> Result<Self> {
         Ok(Config {
-            fmi_place: std::env::var("FMI_PLACE").unwrap_or_else(|_| "helsinki".to_string()),
+            fmi_sid: std::env::var("FMI_SID").unwrap_or_else(|_| "101799".to_string()),
+            fmi_sid_wind: std::env::var("FMI_SID_WIND").ok(),
             port: std::env::var("PORT")
                 .unwrap_or_else(|_| "3000".to_string())
                 .parse()

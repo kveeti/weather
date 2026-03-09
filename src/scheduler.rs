@@ -34,7 +34,7 @@ pub fn spawn(db: db::Db, config: Config) {
 }
 
 pub async fn build_daily_summary(db: &db::Db, config: &Config) -> anyhow::Result<String> {
-    let forecast = weather::fetch_forecast(&config.fmi_place).await?;
+    let forecast = weather::fetch_forecast(&config.fmi_sid).await?;
 
     let now = Utc::now();
 
@@ -144,6 +144,45 @@ pub async fn build_daily_summary(db: &db::Db, config: &Config) -> anyhow::Result
             (sum / *count as f64, local.format("%H:%M").to_string())
         });
 
+    // Daytime (9–21) wind and precipitation averages
+    let day_start = Local::now().date_naive().and_hms_opt(9, 0, 0).unwrap();
+    let day_start_utc = Local.from_local_datetime(&day_start).unwrap().to_utc();
+    let day_end_utc = day_start_utc + chrono::Duration::hours(12);
+    let daytime: Vec<_> = forecast
+        .iter()
+        .filter(|p| p.timestamp >= day_start_utc && p.timestamp < day_end_utc)
+        .collect();
+    let daytime_winds: Vec<f64> = daytime
+        .iter()
+        .map(|p| p.wind_speed_ms)
+        .filter(|v| v.is_finite())
+        .collect();
+    let avg_wind = if daytime_winds.is_empty() {
+        None
+    } else {
+        Some(daytime_winds.iter().sum::<f64>() / daytime_winds.len() as f64)
+    };
+    let daytime_precip: Vec<f64> = daytime
+        .iter()
+        .map(|p| p.precipitation_mm)
+        .filter(|v| v.is_finite())
+        .collect();
+    let total_precip: f64 = daytime_precip.iter().sum();
+    let avg_precip = if total_precip > 0.1 {
+        Some(total_precip / daytime_precip.len() as f64)
+    } else {
+        None
+    };
+
+    let wind_part = match avg_wind {
+        Some(w) => format!(", ~{:.0} m/s", w),
+        None => String::new(),
+    };
+    let precip_part = match avg_precip {
+        Some(p) => format!(", ~{:.1} mm/h", p),
+        None => String::new(),
+    };
+
     let price_part = match (avg_price, &cheapest, &most_expensive) {
         (Some(avg), Some((cheap, cheap_t)), Some((exp, exp_t))) => {
             format!(
@@ -177,7 +216,7 @@ pub async fn build_daily_summary(db: &db::Db, config: &Config) -> anyhow::Result
     };
 
     Ok(format!(
-        "W: {}..{} | {}..{}{}{radiator_part}",
+        "W: {}..{} | {}..{}{wind_part}{precip_part}{}{radiator_part}",
         min_str, max_str, temp_9, temp_16, price_part
     ))
 }
@@ -208,9 +247,48 @@ async fn run_check(db: &db::Db, config: &Config) -> anyhow::Result<()> {
         }
     }
 
-    info!("Scheduler: fetching forecast for {}", config.fmi_place);
+    // Weather observations
+    let obs_stale = match db.get_latest_observation_timestamp().await {
+        Ok(Some(latest)) => match chrono::DateTime::parse_from_rfc3339(&latest) {
+            Ok(latest_dt) => {
+                let hours_ago = (Utc::now() - latest_dt.to_utc()).num_hours();
+                info!("Latest weather observation is {hours_ago}h old");
+                hours_ago >= 2
+            }
+            Err(_) => true,
+        },
+        _ => true,
+    };
+    if obs_stale {
+        match weather::fetch_observations(&config.fmi_sid).await {
+            Ok(points) => {
+                info!("Fetched {} weather observation points", points.len());
+                if let Err(e) = db.upsert_weather_observations(&points).await {
+                    error!("Failed to upsert weather observations: {e}");
+                }
+            }
+            Err(e) => {
+                error!("Failed to fetch weather observations: {e}");
+            }
+        }
+        if let Some(wind_sid) = &config.fmi_sid_wind {
+            match weather::fetch_observations(wind_sid).await {
+                Ok(points) => {
+                    info!("Fetched {} wind observation points from {wind_sid}", points.len());
+                    if let Err(e) = db.merge_wind_observations(&points).await {
+                        error!("Failed to merge wind observations: {e}");
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to fetch wind observations from {wind_sid}: {e}");
+                }
+            }
+        }
+    }
 
-    let forecast = match weather::fetch_forecast(&config.fmi_place).await {
+    info!("Scheduler: fetching forecast for {}", config.fmi_sid);
+
+    let forecast = match weather::fetch_forecast(&config.fmi_sid).await {
         Ok(f) => f,
         Err(e) => {
             info!("Failed to fetch forecast: {e}");

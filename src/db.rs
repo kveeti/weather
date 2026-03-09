@@ -2,6 +2,8 @@ use anyhow::Result;
 use chrono::NaiveDate;
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 
+use crate::weather::ForecastPoint;
+
 #[derive(Clone)]
 pub struct Db {
     pool: SqlitePool,
@@ -55,6 +57,19 @@ impl Db {
             "CREATE TABLE IF NOT EXISTS electricity_prices (
                 timestamp       TEXT NOT NULL PRIMARY KEY,
                 price_cents_kwh REAL NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS weather_observations (
+                timestamp        TEXT NOT NULL PRIMARY KEY,
+                temperature_c    REAL NOT NULL,
+                wind_speed_ms    REAL,
+                precipitation_mm REAL,
+                humidity         REAL,
+                wind_direction   REAL
             )",
         )
         .execute(&pool)
@@ -183,6 +198,73 @@ impl Db {
         .await?;
         Ok(rows)
     }
+    // --- Weather observations ---
+
+    pub async fn upsert_weather_observations(&self, points: &[ForecastPoint]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for p in points {
+            let ts = p.timestamp.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            sqlx::query(
+                "INSERT OR REPLACE INTO weather_observations (timestamp, temperature_c, wind_speed_ms, precipitation_mm, humidity, wind_direction) VALUES (?, ?, ?, ?, ?, ?)",
+            )
+            .bind(&ts)
+            .bind(p.temperature_c)
+            .bind(finite_or_none(p.wind_speed_ms))
+            .bind(finite_or_none(p.precipitation_mm))
+            .bind(finite_or_none(p.humidity))
+            .bind(finite_or_none(p.wind_direction))
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Merge wind data from a secondary station into existing observations.
+    /// Only updates wind columns for timestamps that already exist.
+    pub async fn merge_wind_observations(&self, points: &[ForecastPoint]) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for p in points {
+            let ts = p.timestamp.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+            let ws = finite_or_none(p.wind_speed_ms);
+            let wd = finite_or_none(p.wind_direction);
+            if ws.is_some() || wd.is_some() {
+                sqlx::query(
+                    "UPDATE weather_observations SET wind_speed_ms = COALESCE(?, wind_speed_ms), wind_direction = COALESCE(?, wind_direction) WHERE timestamp = ?",
+                )
+                .bind(ws)
+                .bind(wd)
+                .bind(&ts)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn get_latest_observation_timestamp(&self) -> Result<Option<String>> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT MAX(timestamp) FROM weather_observations")
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.and_then(|r| if r.0.is_empty() { None } else { Some(r.0) }))
+    }
+
+    pub async fn get_weather_observations(
+        &self,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<WeatherObservation>> {
+        let rows = sqlx::query_as::<_, WeatherObservation>(
+            "SELECT timestamp, temperature_c, wind_speed_ms, precipitation_mm, humidity, wind_direction FROM weather_observations WHERE timestamp >= ? AND timestamp < ? ORDER BY timestamp",
+        )
+        .bind(from)
+        .bind(to)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
 }
 
 // --- Types ---
@@ -198,4 +280,18 @@ pub struct Subscription {
 pub struct ElectricityPrice {
     pub timestamp: String,
     pub price_cents_kwh: f64,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct WeatherObservation {
+    pub timestamp: String,
+    pub temperature_c: f64,
+    pub wind_speed_ms: f64,
+    pub precipitation_mm: f64,
+    pub humidity: f64,
+    pub wind_direction: f64,
+}
+
+fn finite_or_none(v: f64) -> Option<f64> {
+    if v.is_finite() { Some(v) } else { None }
 }

@@ -2,17 +2,35 @@ use axum::{
     extract::{Form, State},
     response::{Html, Redirect},
 };
-use chrono::{Local, TimeZone, Timelike, Utc};
+use chrono::{Local, NaiveDate, TimeZone, Utc};
 use hypertext::prelude::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::{
     weather::{self, temp_to_radiator_setting, ForecastPoint},
     AppState,
 };
 
+struct HourRow {
+    timestamp: chrono::DateTime<Utc>,
+    temperature_c: f64,
+    wind_speed_ms: f64,
+    precipitation_mm: f64,
+}
+
+struct DayGroup {
+    date: NaiveDate,
+    label: String,
+    rows: Vec<HourRow>,
+    min_temp: f64,
+    max_temp: f64,
+    total_precip: f64,
+    avg_wind: f64,
+    avg_price: f64,
+}
+
 pub async fn handler(State(state): State<AppState>) -> Html<String> {
-    let forecast = match weather::fetch_forecast(&state.config.fmi_place).await {
+    let forecast = match weather::fetch_forecast(&state.config.fmi_sid).await {
         Ok(f) => f,
         Err(e) => {
             return Html(error_page(&format!("Failed to fetch forecast: {e}")));
@@ -25,6 +43,181 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
     };
 
     let now = Utc::now();
+    let today = now.with_timezone(&Local).date_naive();
+    let tomorrow = today + chrono::Duration::days(1);
+
+    // Load observations from DB, fetch on-demand if empty
+    let obs_from = (now - chrono::Duration::days(7))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let obs_to = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let mut observations = state
+        .db
+        .get_weather_observations(&obs_from, &obs_to)
+        .await
+        .unwrap_or_default();
+    tracing::info!(
+        "Observations from DB: {} (from={}, to={})",
+        observations.len(),
+        obs_from,
+        obs_to
+    );
+    if observations.is_empty() {
+        match weather::fetch_observations(&state.config.fmi_sid).await {
+            Ok(points) => {
+                tracing::info!("Fetched {} observation points from FMI", points.len());
+                if let Err(e) = state.db.upsert_weather_observations(&points).await {
+                    tracing::error!("Failed to upsert observations: {e}");
+                }
+                if let Some(wind_sid) = &state.config.fmi_sid_wind {
+                    match weather::fetch_observations(wind_sid).await {
+                        Ok(wind_points) => {
+                            if let Err(e) = state.db.merge_wind_observations(&wind_points).await {
+                                tracing::error!("Failed to merge wind observations: {e}");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to fetch wind observations: {e}");
+                        }
+                    }
+                }
+                observations = state
+                    .db
+                    .get_weather_observations(&obs_from, &obs_to)
+                    .await
+                    .unwrap_or_default();
+                tracing::info!("After upsert, observations from DB: {}", observations.len());
+            }
+            Err(e) => {
+                tracing::error!("Failed to fetch observations from FMI: {e}");
+            }
+        }
+    }
+
+    // Merge observations + forecast into a BTreeMap keyed by hour timestamp.
+    // Observations take priority on overlap.
+    let mut timeline: BTreeMap<i64, HourRow> = BTreeMap::new();
+
+    // Insert forecast first
+    for p in &forecast {
+        let hour_ts = p.timestamp.timestamp() - (p.timestamp.timestamp() % 3600);
+        timeline.insert(
+            hour_ts,
+            HourRow {
+                timestamp: p.timestamp,
+                temperature_c: p.temperature_c,
+                wind_speed_ms: p.wind_speed_ms,
+                precipitation_mm: p.precipitation_mm,
+            },
+        );
+    }
+
+    // Overwrite with observations (they win on overlap)
+    for o in &observations {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&o.timestamp) {
+            let utc = dt.to_utc();
+            let hour_ts = utc.timestamp() - (utc.timestamp() % 3600);
+            timeline.insert(
+                hour_ts,
+                HourRow {
+                    timestamp: utc,
+                    temperature_c: o.temperature_c,
+                    wind_speed_ms: o.wind_speed_ms,
+                    precipitation_mm: o.precipitation_mm,
+                },
+            );
+        }
+    }
+
+    // Group by local date
+    let mut day_map: BTreeMap<NaiveDate, Vec<HourRow>> = BTreeMap::new();
+    for (_, row) in timeline {
+        let local_date = row.timestamp.with_timezone(&Local).date_naive();
+        day_map.entry(local_date).or_default().push(row);
+    }
+
+    // Electricity prices — cover observations + forecast window
+    let price_from = (now - chrono::Duration::days(7))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let price_to = (now + chrono::Duration::hours(73))
+        .format("%Y-%m-%dT%H:%M:%SZ")
+        .to_string();
+    let electricity_prices = state
+        .db
+        .get_electricity_prices(&price_from, &price_to)
+        .await
+        .unwrap_or_default();
+
+    // Hourly prices for table display
+    let mut hourly_prices: HashMap<i64, (f64, usize)> = HashMap::new();
+    for p in &electricity_prices {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&p.timestamp) {
+            let hour_ts = dt.to_utc().timestamp() - (dt.to_utc().timestamp() % 3600);
+            let entry = hourly_prices.entry(hour_ts).or_insert((0.0, 0));
+            entry.0 += p.price_cents_kwh;
+            entry.1 += 1;
+        }
+    }
+
+    // Build day groups with summaries
+    let day_groups: Vec<DayGroup> = day_map
+        .into_iter()
+        .map(|(date, rows)| {
+            let min_temp = rows
+                .iter()
+                .filter(|r| r.temperature_c.is_finite())
+                .map(|r| r.temperature_c)
+                .fold(f64::INFINITY, f64::min);
+            let max_temp = rows
+                .iter()
+                .filter(|r| r.temperature_c.is_finite())
+                .map(|r| r.temperature_c)
+                .fold(f64::NEG_INFINITY, f64::max);
+            let total_precip: f64 = rows
+                .iter()
+                .filter(|r| r.precipitation_mm.is_finite())
+                .map(|r| r.precipitation_mm)
+                .sum();
+            let wind_vals: Vec<f64> = rows
+                .iter()
+                .filter(|r| r.wind_speed_ms.is_finite())
+                .map(|r| r.wind_speed_ms)
+                .collect();
+            let avg_wind = if wind_vals.is_empty() {
+                f64::NAN
+            } else {
+                wind_vals.iter().sum::<f64>() / wind_vals.len() as f64
+            };
+            let day_prices: Vec<f64> = rows
+                .iter()
+                .filter_map(|r| {
+                    let hour_ts = r.timestamp.timestamp() - (r.timestamp.timestamp() % 3600);
+                    hourly_prices
+                        .get(&hour_ts)
+                        .map(|(sum, count)| sum / *count as f64)
+                })
+                .collect();
+            let avg_price = if day_prices.is_empty() {
+                f64::NAN
+            } else {
+                day_prices.iter().sum::<f64>() / day_prices.len() as f64
+            };
+            let label = format!("{}", date.format("%a %-d %b"));
+            DayGroup {
+                date,
+                label,
+                rows,
+                min_temp,
+                max_temp,
+                total_precip,
+                avg_wind,
+                avg_price,
+            }
+        })
+        .collect();
+
+    // Next 24h stats for the summary header
     let next_24h: Vec<_> = forecast
         .iter()
         .filter(|p| p.timestamp >= now && p.timestamp <= now + chrono::Duration::hours(24))
@@ -45,13 +238,7 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
     let avg_temp = {
         let (sum, count) = next_24h
             .iter()
-            .filter(|p| {
-                if !p.temperature_c.is_finite() {
-                    return false;
-                }
-                let local_hour = p.timestamp.with_timezone(&Local).hour();
-                (8..20).contains(&local_hour)
-            })
+            .filter(|p| p.temperature_c.is_finite())
             .fold((0.0, 0usize), |(s, c), p| (s + p.temperature_c, c + 1));
         if count > 0 {
             sum / count as f64
@@ -60,28 +247,22 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
         }
     };
 
+    let current_temp = forecast
+        .iter()
+        .filter(|p| p.temperature_c.is_finite())
+        .min_by_key(|p| (p.timestamp - now).num_seconds().unsigned_abs())
+        .map(|p| p.temperature_c)
+        .unwrap_or(f64::NAN);
+
     let weighted_avg = ForecastPoint::weighted_avg_temperature(&forecast, 0.9, 24, 3);
     let recommended_setting = temp_to_radiator_setting(weighted_avg);
     let current_radiator = state.db.get_radiator_setting().await.ok().flatten();
 
-    let place = &state.config.fmi_place;
-
-    // Electricity prices — load from start of today (local) through forecast window
-    let today_start = Local::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
-    let today_start_utc = Local.from_local_datetime(&today_start).unwrap().to_utc();
-    let price_from = today_start_utc.format("%Y-%m-%dT%H:%M:%SZ").to_string();
-    let price_to = (now + chrono::Duration::hours(25))
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
-    let electricity_prices = state
-        .db
-        .get_electricity_prices(&price_from, &price_to)
-        .await
-        .unwrap_or_default();
+    let place = &state.config.fmi_sid;
 
     // Current price: find the 15-min slot containing now
     let now_ts = now.timestamp();
-    let current_slot = now_ts - (now_ts % 900); // round down to 15-min
+    let current_slot = now_ts - (now_ts % 900);
     let current_price = electricity_prices.iter().find_map(|p| {
         let dt = chrono::DateTime::parse_from_rfc3339(&p.timestamp).ok()?;
         if dt.to_utc().timestamp() == current_slot {
@@ -91,17 +272,9 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
         }
     });
 
-    // Cheapest hour today (average of 15-min slots per hour, only remaining hours)
-    let mut hourly_prices: HashMap<i64, (f64, usize)> = HashMap::new();
-    for p in &electricity_prices {
-        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&p.timestamp) {
-            let hour_ts = dt.to_utc().timestamp() - (dt.to_utc().timestamp() % 3600);
-            let entry = hourly_prices.entry(hour_ts).or_insert((0.0, 0));
-            entry.0 += p.price_cents_kwh;
-            entry.1 += 1;
-        }
-    }
-
+    // Today's price stats
+    let today_start = Local::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let today_start_utc = Local.from_local_datetime(&today_start).unwrap().to_utc();
     let today_end_utc = today_start_utc + chrono::Duration::hours(24);
     let today_hours: HashMap<_, _> = hourly_prices
         .iter()
@@ -165,8 +338,9 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
             <div class=" text-sm mb-2">
                 @let min_s = if min_temp.is_finite() { format!("{:.0}", min_temp) } else { "-".into() };
                 @let max_s = if max_temp.is_finite() { format!("{:.0}", max_temp) } else { "-".into() };
+                @let cur_s = if current_temp.is_finite() { format!("{:.0}", current_temp) } else { "-".into() };
                 @let avg_s = if avg_temp.is_finite() { format!("{:.0}", avg_temp) } else { "-".into() };
-                <p class="mb-0.5"> <span class="bg-gray-a5 px-0.5 -mx-0.5"> (avg_s) "°C" </span> " avg, " (min_s) ".." (max_s) "°C" </p>
+                <p class="mb-0.5"> <span class="bg-gray-a5 px-0.5 -mx-0.5"> (cur_s) "°C" </span> " now, avg " (avg_s) " | " (min_s) ".." (max_s) "°C" </p>
 
                 @let current_s = current_price.map(|p| format!("{:.1}", p)).unwrap_or_else(|| "-".into());
                 @let avg_p_s = avg_price.map(|p| format!("{:.1}", p)).unwrap_or_else(|| "-".into());
@@ -178,54 +352,74 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
                 };
                 <p> <span class="bg-gray-a5 px-0.5 -mx-0.5"> (current_s) " snt" </span> " now, avg " (avg_p_s) " | " (range_s) " snt" </p>
             </div>
-            <p class="text-gray-11 text-xs"> "Location: " (place) " · " (sub_count) " push subscriber(s)" </p>
+            <p class="text-gray-11 text-xs mb-4"> "Location: " (place) " · " (sub_count) " push subscriber(s)" </p>
 
-            <h2 class="text-base mt-8 mb-2 text-gray-12">Forecast</h2>
-            <div class="overflow-x-auto">
-                <table class="w-full text-sm">
-                    <thead>
-                        <tr class="bg-gray-3">
-                            <th class="px-3 py-2 text-left font-medium text-gray-11">Time</th>
-                            <th class="px-3 py-2 text-left font-medium text-gray-11">Temp</th>
-                            <th class="px-3 py-2 text-left font-medium text-gray-11">Wind</th>
-                            <th class="px-3 py-2 text-left font-medium text-gray-11">Precip</th>
-                            <th class="px-3 py-2 text-left font-medium text-gray-11">"E.Price"</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @for p in next_24h.iter().step_by(3) {
-                            @let local_dt = Local.from_utc_datetime(&p.timestamp.naive_utc());
-                            @let time_str = local_dt.format("%a %H:%M").to_string();
-                            @let temp = if p.temperature_c.is_finite() {
-                                format!("{:.1}", p.temperature_c)
-                            } else {
-                                "-".to_string()
-                            };
-                            @let wind = if p.wind_speed_ms.is_finite() {
-                                format!("{:.1}", p.wind_speed_ms)
-                            } else {
-                                "-".to_string()
-                            };
-                            @let precip = if p.precipitation_mm.is_finite() {
-                                format!("{:.1}", p.precipitation_mm)
-                            } else {
-                                "-".to_string()
-                            };
-                            @let hour_ts = p.timestamp.timestamp() - (p.timestamp.timestamp() % 3600);
-                            @let price = hourly_prices
-                                .get(&hour_ts)
-                                .map(|(sum, count)| format!("{:.1}", sum / *count as f64))
-                                .unwrap_or_else(|| "-".to_string());
-                            <tr class="even:bg-gray-2">
-                                <td class="px-3 py-2"> (time_str) </td>
-                                <td class="px-3 py-2"> (format!("{}°C", temp)) </td>
-                                <td class="px-3 py-2"> (format!("{} m/s", wind)) </td>
-                                <td class="px-3 py-2"> (format!("{} mm", precip)) </td>
-                                <td class="px-3 py-2"> (format!("{} snt", price)) </td>
-                            </tr>
-                        }
-                    </tbody>
-                </table>
+            <div class="grid grid-cols-[max-content_1fr_1fr_1fr_1fr] gap-x-2">
+                @for (idx, day) in day_groups.iter().enumerate() {
+                    @let is_open = day.date == today || day.date == tomorrow;
+                    @let min_s = if day.min_temp.is_finite() { format!("{:.0}", day.min_temp) } else { "-".into() };
+                    @let max_s = if day.max_temp.is_finite() { format!("{:.0}", day.max_temp) } else { "-".into() };
+                    @let precip_s = format!("{:.1}", day.total_precip);
+                    @let wind_s = if day.avg_wind.is_finite() { format!("{:.0}", day.avg_wind) } else { "-".into() };
+                    @let price_s = if day.avg_price.is_finite() { format!("{:.1}", day.avg_price) } else { "-".into() };
+                    @let is_today = day.date == today;
+                    @let day_label = if is_today { format!("Today") } else { day.label.clone() };
+                    @let panel_id = format!("day-{idx}");
+                    <div class="col-span-5 grid grid-cols-subgrid cursor-pointer py-2 px-3 mb-1 bg-gray-3 text-gray-12 text-sm font-medium select-none whitespace-nowrap"
+                         onclick=(format!("document.getElementById('{panel_id}').toggleAttribute('hidden')"))>
+                        <span> (day_label) </span>
+                        <span class="text-gray-11 font-normal"> (min_s) ".." (max_s) "°C" </span>
+                        <span class="text-gray-11 font-normal"> (wind_s) " m/s" </span>
+                        <span class="text-gray-11 font-normal"> (precip_s) " mm" </span>
+                        <span class="text-gray-11 font-normal"> (price_s) " snt" </span>
+                    </div>
+                    <div id=(panel_id) class="col-span-5 overflow-x-auto" hidden=[(!is_open).then_some("")]>
+                        <table class="w-full text-sm">
+                            <thead>
+                                <tr class="bg-gray-2">
+                                    <th class="px-3 py-1.5 text-left font-medium text-gray-11">Time</th>
+                                    <th class="px-3 py-1.5 text-left font-medium text-gray-11">Temp</th>
+                                    <th class="px-3 py-1.5 text-left font-medium text-gray-11">Wind</th>
+                                    <th class="px-3 py-1.5 text-left font-medium text-gray-11">Precip</th>
+                                    <th class="px-3 py-1.5 text-left font-medium text-gray-11">"E.Price"</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @for row in &day.rows {
+                                    @let local_dt = Local.from_utc_datetime(&row.timestamp.naive_utc());
+                                    @let time_str = local_dt.format("%H:%M").to_string();
+                                    @let temp = if row.temperature_c.is_finite() {
+                                        format!("{:.1}", row.temperature_c)
+                                    } else {
+                                        "-".to_string()
+                                    };
+                                    @let wind = if row.wind_speed_ms.is_finite() {
+                                        format!("{:.1}", row.wind_speed_ms)
+                                    } else {
+                                        "-".to_string()
+                                    };
+                                    @let precip = if row.precipitation_mm.is_finite() {
+                                        format!("{:.1}", row.precipitation_mm)
+                                    } else {
+                                        "-".to_string()
+                                    };
+                                    @let hour_ts = row.timestamp.timestamp() - (row.timestamp.timestamp() % 3600);
+                                    @let price = hourly_prices
+                                        .get(&hour_ts)
+                                        .map(|(sum, count)| format!("{:.1}", sum / *count as f64))
+                                        .unwrap_or_else(|| "-".to_string());
+                                    <tr class="even:bg-gray-2">
+                                        <td class="px-3 py-1.5"> (time_str) </td>
+                                        <td class="px-3 py-1.5"> (format!("{}°C", temp)) </td>
+                                        <td class="px-3 py-1.5"> (format!("{} m/s", wind)) </td>
+                                        <td class="px-3 py-1.5"> (format!("{} mm", precip)) </td>
+                                        <td class="px-3 py-1.5"> (format!("{} snt", price)) </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
             </div>
 
             <form method="POST" action="/radiator" class="mt-8">
@@ -240,7 +434,7 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
                     }
                 </h2>
                 <div class="flex gap-2 text-sm">
-                    @for (i, v) in [0.0_f64, 2.0, 3.5].iter().enumerate() {
+                    @for (_, v) in [0.0_f64, 2.0, 3.5].iter().enumerate() {
                         @let label = if *v == 0.0 { "Off" } else { &v.to_string() };
                         @let base_classes = "focus flex-1 py-3 px-4 bg-gray-a4 text-gray-12 font-medium".to_owned();
                         @let is_active_setting = current_radiator
@@ -263,6 +457,10 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
                 <button onclick="testSummary(this)" class="bg-gray-a4 text-gray-12 px-4 py-2 border-none text-sm">Test Daily Notif</button>
             </div>
             <div id="push-status" class="text-xs text-gray-11 mt-2"></div>
+
+            <div class="mt-8">
+                <a href="/" class="bg-gray-a4 text-gray-12 px-4 py-2 text-sm inline-block no-underline">Refresh</a>
+            </div>
         </body>
         </html>
     }.render().into_inner())
