@@ -55,9 +55,9 @@ pub fn temp_to_radiator_setting(temp_c: f64) -> f64 {
         return f64::NAN;
     }
 
-    if temp_c < 5.0 {
+    if temp_c < -1.0 {
         3.5
-    } else if temp_c < 15.0 {
+    } else if temp_c < 10.0 {
         2.0
     } else {
         0.0
