@@ -129,11 +129,14 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
         }
     }
 
-    // Group by local date
+    // Group by local date, limit to 1 week past
+    let one_week_ago = today - chrono::Duration::days(7);
     let mut day_map: BTreeMap<NaiveDate, Vec<HourRow>> = BTreeMap::new();
     for (_, row) in timeline {
         let local_date = row.timestamp.with_timezone(&Local).date_naive();
-        day_map.entry(local_date).or_default().push(row);
+        if local_date >= one_week_ago {
+            day_map.entry(local_date).or_default().push(row);
+        }
     }
 
     // Electricity prices — cover observations + forecast window
@@ -408,7 +411,10 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
                                         .get(&hour_ts)
                                         .map(|(sum, count)| format!("{:.1}", sum / *count as f64))
                                         .unwrap_or_else(|| "-".to_string());
-                                    <tr class="even:bg-gray-2">
+                                    @let current_hour_ts = now.timestamp() - (now.timestamp() % 3600);
+                                    @let is_current = hour_ts == current_hour_ts;
+                                    @let tr_class = if is_current { "bg-gray-4 font-bold" } else { "even:bg-gray-2" };
+                                    <tr class=(tr_class)>
                                         <td class="px-3 py-1.5"> (time_str) </td>
                                         <td class="px-3 py-1.5"> (format!("{}°C", temp)) </td>
                                         <td class="px-3 py-1.5"> (format!("{} m/s", wind)) </td>
