@@ -1,4 +1,4 @@
-use chrono::{Local, TimeZone, Timelike, Utc};
+use chrono::{TimeZone, Timelike, Utc};
 use std::collections::HashMap;
 use tracing::{error, info};
 
@@ -15,7 +15,7 @@ pub fn spawn(db: db::Db, config: Config) {
             if let Err(e) = run_check(&db, &config).await {
                 error!("Scheduler error: {e}");
             }
-            let now = Local::now();
+            let now = Utc::now().with_timezone(&config.tz);
             let next_hour = (now + chrono::Duration::hours(1))
                 .with_minute(2)
                 .unwrap()
@@ -37,6 +37,7 @@ pub async fn build_daily_summary(db: &db::Db, config: &Config) -> anyhow::Result
     let forecast = weather::fetch_forecast(&config.fmi_sid).await?;
 
     let now = Utc::now();
+    let tz = config.tz;
 
     let next_24h: Vec<_> = forecast
         .iter()
@@ -59,11 +60,11 @@ pub async fn build_daily_summary(db: &db::Db, config: &Config) -> anyhow::Result
     let recommended_setting = temp_to_radiator_setting(weighted_avg);
 
     let temp_at = |local_hour: u32| -> String {
-        let target = Local::now()
+        let target = now.with_timezone(&tz)
             .date_naive()
             .and_hms_opt(local_hour, 0, 0)
             .unwrap();
-        let target_utc = Local.from_local_datetime(&target).unwrap().to_utc();
+        let target_utc = tz.from_local_datetime(&target).unwrap().to_utc();
         forecast
             .iter()
             .min_by_key(|p| (p.timestamp - target_utc).num_seconds().unsigned_abs())
@@ -87,8 +88,8 @@ pub async fn build_daily_summary(db: &db::Db, config: &Config) -> anyhow::Result
         "?".to_string()
     };
 
-    let today_start = Local::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
-    let today_start_utc = Local.from_local_datetime(&today_start).unwrap().to_utc();
+    let today_start = now.with_timezone(&tz).date_naive().and_hms_opt(0, 0, 0).unwrap();
+    let today_start_utc = tz.from_local_datetime(&today_start).unwrap().to_utc();
     let today_end_utc = today_start_utc + chrono::Duration::hours(24);
     let price_from = today_start_utc.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let price_to = today_end_utc.format("%Y-%m-%dT%H:%M:%SZ").to_string();
@@ -125,7 +126,7 @@ pub async fn build_daily_summary(db: &db::Db, config: &Config) -> anyhow::Result
         })
         .map(|(&h, (sum, count))| {
             let dt = chrono::DateTime::from_timestamp(h, 0).unwrap();
-            let local = Local.from_utc_datetime(&dt.naive_utc());
+            let local = dt.with_timezone(&tz);
             (sum / *count as f64, local.format("%H:%M").to_string())
         });
 
@@ -140,13 +141,13 @@ pub async fn build_daily_summary(db: &db::Db, config: &Config) -> anyhow::Result
         })
         .map(|(&h, (sum, count))| {
             let dt = chrono::DateTime::from_timestamp(h, 0).unwrap();
-            let local = Local.from_utc_datetime(&dt.naive_utc());
+            let local = dt.with_timezone(&tz);
             (sum / *count as f64, local.format("%H:%M").to_string())
         });
 
     // Daytime (9–21) wind and precipitation averages
-    let day_start = Local::now().date_naive().and_hms_opt(9, 0, 0).unwrap();
-    let day_start_utc = Local.from_local_datetime(&day_start).unwrap().to_utc();
+    let day_start = now.with_timezone(&tz).date_naive().and_hms_opt(9, 0, 0).unwrap();
+    let day_start_utc = tz.from_local_datetime(&day_start).unwrap().to_utc();
     let day_end_utc = day_start_utc + chrono::Duration::hours(12);
     let daytime: Vec<_> = forecast
         .iter()
@@ -297,7 +298,8 @@ async fn run_check(db: &db::Db, config: &Config) -> anyhow::Result<()> {
     };
 
     let now = Utc::now();
-    let today = now.with_timezone(&Local).date_naive();
+    let tz = config.tz;
+    let today = now.with_timezone(&tz).date_naive();
 
     let next_24h: Vec<_> = forecast
         .iter()
@@ -336,7 +338,7 @@ async fn run_check(db: &db::Db, config: &Config) -> anyhow::Result<()> {
     };
 
     // Daily summary
-    let local_hour = Local::now().hour();
+    let local_hour = now.with_timezone(&tz).hour();
     if local_hour == config.summary_hour {
         let summary_key = "daily_summary";
         let already_sent = db.already_notified(summary_key, today).await?;

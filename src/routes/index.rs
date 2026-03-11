@@ -2,7 +2,7 @@ use axum::{
     extract::{Form, State},
     response::{Html, Redirect},
 };
-use chrono::{Local, NaiveDate, TimeZone, Utc};
+use chrono::{NaiveDate, TimeZone, Utc};
 use hypertext::prelude::*;
 use std::collections::{BTreeMap, HashMap};
 
@@ -43,7 +43,8 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
     };
 
     let now = Utc::now();
-    let today = now.with_timezone(&Local).date_naive();
+    let tz = state.config.tz;
+    let today = now.with_timezone(&tz).date_naive();
     let tomorrow = today + chrono::Duration::days(1);
 
     // Load observations from DB, fetch on-demand if empty
@@ -133,7 +134,7 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
     let one_week_ago = today - chrono::Duration::days(7);
     let mut day_map: BTreeMap<NaiveDate, Vec<HourRow>> = BTreeMap::new();
     for (_, row) in timeline {
-        let local_date = row.timestamp.with_timezone(&Local).date_naive();
+        let local_date = row.timestamp.with_timezone(&tz).date_naive();
         if local_date >= one_week_ago {
             day_map.entry(local_date).or_default().push(row);
         }
@@ -276,8 +277,8 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
     });
 
     // Today's price stats
-    let today_start = Local::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
-    let today_start_utc = Local.from_local_datetime(&today_start).unwrap().to_utc();
+    let today_start = today.and_hms_opt(0, 0, 0).unwrap();
+    let today_start_utc = tz.from_local_datetime(&today_start).unwrap().to_utc();
     let today_end_utc = today_start_utc + chrono::Duration::hours(24);
     let today_hours: HashMap<_, _> = hourly_prices
         .iter()
@@ -306,7 +307,7 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
         })
         .map(|(&h, (sum, count))| {
             let dt = chrono::DateTime::from_timestamp(h, 0).unwrap();
-            let local = Local.from_utc_datetime(&dt.naive_utc());
+            let local = dt.with_timezone(&tz);
             (sum / *count as f64, local.format("%H:%M").to_string())
         });
 
@@ -321,7 +322,7 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
         })
         .map(|(&h, (sum, count))| {
             let dt = chrono::DateTime::from_timestamp(h, 0).unwrap();
-            let local = Local.from_utc_datetime(&dt.naive_utc());
+            let local = dt.with_timezone(&tz);
             (sum / *count as f64, local.format("%H:%M").to_string())
         });
 
@@ -389,7 +390,7 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
                             </thead>
                             <tbody>
                                 @for row in &day.rows {
-                                    @let local_dt = Local.from_utc_datetime(&row.timestamp.naive_utc());
+                                    @let local_dt = row.timestamp.with_timezone(&tz);
                                     @let time_str = local_dt.format("%H:%M").to_string();
                                     @let temp = if row.temperature_c.is_finite() {
                                         format!("{:.1}", row.temperature_c)

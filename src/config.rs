@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono_tz::Tz;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -10,6 +11,7 @@ pub struct Config {
     pub vapid_public_key: String,
     pub vapid_private_key: String,
     pub summary_hour: u32,
+    pub tz: Tz,
 }
 
 impl Config {
@@ -30,6 +32,10 @@ impl Config {
                 .unwrap_or_else(|_| "7".to_string())
                 .parse()
                 .context("SUMMARY_HOUR must be a number 0-23")?,
+            tz: std::env::var("TZ")
+                .unwrap_or_else(|_| "Europe/Helsinki".to_string())
+                .parse()
+                .context("TZ must be a valid IANA timezone (e.g. Europe/Helsinki)")?,
         })
     }
 }

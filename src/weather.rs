@@ -70,7 +70,9 @@ pub async fn fetch_forecast(fmisid: &str) -> Result<Vec<ForecastPoint>> {
     let client = reqwest::Client::builder().use_rustls_tls().build()?;
 
     let now = Utc::now();
-    let start = now.format("%Y-%m-%dT%H:%M:%S.000Z");
+    let hour_ts = now.timestamp() - (now.timestamp() % 3600);
+    let current_hour = DateTime::from_timestamp(hour_ts, 0).unwrap();
+    let start = current_hour.format("%Y-%m-%dT%H:%M:%S.000Z");
     let end = (now + Duration::days(7)).format("%Y-%m-%dT%H:%M:%S.000Z");
 
     let params = "Temperature,WindSpeedMS,Precipitation1h,Humidity,WindDirection";
