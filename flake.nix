@@ -27,14 +27,15 @@
             cargoLock = {
               lockFile = ./Cargo.lock;
             };
-          };
-          nativeBuildInputs = with pkgs; [
-            tailwindcss_4
-          ];
-          preBuild = ''
-            echo "Compiling Tailwind CSS..."
-            tailwindcss -i ./src/styles.css -o ./static/styles.css --minify
-          '';
+
+            nativeBuildInputs = with pkgs; [
+              tailwindcss_4
+            ];
+            preBuild = ''
+              echo "Compiling Tailwind CSS..."
+              tailwindcss -i ./src/styles.css -o ./static/styles.css --minify
+            '';
+            };
         }
       );
 
