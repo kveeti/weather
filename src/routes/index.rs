@@ -130,6 +130,13 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
         }
     }
 
+    let current_hour_ts = now.timestamp() - (now.timestamp() % 3600);
+    let current_temp = timeline
+        .get(&current_hour_ts)
+        .filter(|r| r.temperature_c.is_finite())
+        .map(|r| r.temperature_c)
+        .unwrap_or(f64::NAN);
+
     // Group by local date, limit to 1 week past
     let one_week_ago = today - chrono::Duration::days(7);
     let mut day_map: BTreeMap<NaiveDate, Vec<HourRow>> = BTreeMap::new();
@@ -251,13 +258,6 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
         }
     };
 
-    let current_temp = forecast
-        .iter()
-        .filter(|p| p.temperature_c.is_finite())
-        .min_by_key(|p| (p.timestamp - now).num_seconds().unsigned_abs())
-        .map(|p| p.temperature_c)
-        .unwrap_or(f64::NAN);
-
     let weighted_avg = ForecastPoint::weighted_avg_temperature(&forecast, 0.9, 24, 3);
     let recommended_setting = temp_to_radiator_setting(weighted_avg);
     let current_radiator = state.db.get_radiator_setting().await.ok().flatten();
@@ -342,7 +342,7 @@ pub async fn handler(State(state): State<AppState>) -> Html<String> {
             <div class=" text-sm mb-2">
                 @let min_s = if min_temp.is_finite() { format!("{:.0}", min_temp) } else { "-".into() };
                 @let max_s = if max_temp.is_finite() { format!("{:.0}", max_temp) } else { "-".into() };
-                @let cur_s = if current_temp.is_finite() { format!("{:.0}", current_temp) } else { "-".into() };
+                @let cur_s = if current_temp.is_finite() { format!("{:.1}", current_temp) } else { "-".into() };
                 @let avg_s = if avg_temp.is_finite() { format!("{:.0}", avg_temp) } else { "-".into() };
                 <p class="mb-0.5"> <span class="bg-gray-a5 px-0.5 -mx-0.5"> (cur_s) "°C" </span> " now, avg " (avg_s) " | " (min_s) ".." (max_s) "°C" </p>
 
